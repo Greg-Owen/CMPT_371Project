@@ -1,8 +1,9 @@
 import tkinter as tk
 import socket
 import threading
+import sys
 
-SERVER_IP = '127.0.0.1'
+SERVER_IP = sys.argv[1] if len(sys.argv) > 1 else '127.0.0.1'
 SERVER_PORT = 5005
 
 class CheckBoxClient:
