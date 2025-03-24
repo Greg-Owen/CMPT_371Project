@@ -17,8 +17,14 @@ def handle_updates():
             data, addr = sock.recvfrom(1024)
             msg = data.decode().split(',')
             if msg[0] == 'register':
-                # Register new client
                 clients.add(addr)
+                # Sync new client with entire board
+                with board_lock:
+                    # Flatten the board into a single list
+                    board_state = [str(cell) for row in board for cell in row]
+                # Send the "board" message with all cells
+                sync_msg = "board," + ",".join(board_state)
+                sock.sendto(sync_msg.encode(), addr)
             elif msg[0] == 'click':
                 row, col = int(msg[1]), int(msg[2])
                 with board_lock:

@@ -44,6 +44,15 @@ class CheckBoxClient:
                 r, c, val = int(msg[1]), int(msg[2]), msg[3] == 'True'
                 self.board[r][c] = val
                 self.check_vars[r][c].set(val)
+            elif msg[0] == 'board':
+                board_data = msg[1:]
+                index = 0
+                for r in range(10):
+                    for c in range(10):
+                        val = (board_data[index] == 'True')
+                        self.board[r][c] = val
+                        self.check_vars[r][c].set(val)
+                        index += 1
 
 if __name__ == "__main__":
     root = tk.Tk()
