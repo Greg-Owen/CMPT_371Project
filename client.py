@@ -1,6 +1,9 @@
 import socket
 import os
 
+import ConnectionHandler
+import GUI
+
 class Client:
 
     @staticmethod
