@@ -8,13 +8,18 @@ HOST = '0.0.0.0'
 PORT = 5005
 REQUIRED_PLAYERS = 4  # Number of players required to start the game
 
-board = [[None for _ in range(10)] for _ in range(10)]
+# Grid dimensions - configurable
+GRID_ROWS = 3
+GRID_COLS = 3
+
+board = [[None for _ in range(GRID_COLS)] for _ in range(GRID_ROWS)]
 board_lock = threading.Lock()
 
 clients = {}
 next_id = 1
 colors = ["red", "blue", "green", "purple", "orange", "magenta", "cyan", "brown", "yellow", "pink"]
 game_started = False  # Track if the game has started
+game_ended = False    # Track if the game has ended
 
 selecting_cells = {}
 client_selecting = {}
@@ -33,7 +38,7 @@ def get_adjacent_cells(row, col):
     
     for dr, dc in directions:
         new_row, new_col = row + dr, col + dc
-        if 0 <= new_row < 10 and 0 <= new_col < 10:
+        if 0 <= new_row < GRID_ROWS and 0 <= new_col < GRID_COLS:
             adjacent.append((new_row, new_col))
             
     return adjacent
@@ -56,9 +61,76 @@ def clear_temp_blocks_for_selection(sock, row, col):
             for client_addr in clients:
                 sock.sendto(unblock_msg.encode(), client_addr)
 
+def is_board_full():
+    """Check if the game board is full"""
+    for row in board:
+        for cell in row:
+            if cell is None:
+                return False
+    return True
+
+def calculate_scores():
+    """Calculate scores for all players"""
+    scores = {}
+    
+    for row in board:
+        for cell in row:
+            if cell is not None:
+                if cell not in scores:
+                    scores[cell] = 1
+                else:
+                    scores[cell] += 1
+    
+    return scores
+
+def get_winners(scores):
+    """Get the player(s) with the highest score"""
+    if not scores:
+        return []
+        
+    max_score = max(scores.values())
+    winners = [player for player, score in scores.items() if score == max_score]
+    return winners
+
+def end_game(sock, ended_by=None):
+    """End the game and announce the results"""
+    global game_ended
+    
+    if game_ended:
+        return
+        
+    game_ended = True
+    
+    # Calculate final scores
+    scores = calculate_scores()
+    winners = get_winners(scores)
+    
+    # Format scores for message
+    score_strings = []
+    for player, score in scores.items():
+        score_strings.append(f"{player},{score}")
+    
+    winner_string = ",".join(winners)
+    scores_string = ";".join(score_strings)
+    
+    # Construct end game message
+    if ended_by:
+        end_message = f"game_end,ended_by,{ended_by},{winner_string},{scores_string}"
+    else:
+        end_message = f"game_end,board_full,{winner_string},{scores_string}"
+    
+    # Send to all clients
+    for client_addr in clients:
+        sock.sendto(end_message.encode(), client_addr)
+
 def selection_complete(sock, row, col, client_addr):
     """Called when selection timer completes"""
+    global game_ended
+    
     with board_lock:
+        if game_ended:
+            return
+            
         if (row, col) in selecting_cells and selecting_cells[(row, col)]["addr"] == client_addr:
             client_id = clients[client_addr]["name"]
             color = clients[client_addr]["color"]
@@ -74,10 +146,7 @@ def selection_complete(sock, row, col, client_addr):
                 sock.sendto(update_msg.encode(), c)     #Updating the board for each client
             
             clear_temp_blocks_for_selection(sock, row, col)
-
-            """Why block the cells after we are done with the selection complete and cleared the array of temp_blocks??
-                Inconsistent code
-            """  
+            
             adjacent_cells = get_adjacent_cells(row, col)
             block_duration = 3.0
             end_time = time.time() + block_duration
@@ -93,6 +162,10 @@ def selection_complete(sock, row, col, client_addr):
                     block_msg = f"block_adjacent,{adj_r},{adj_c},{client_id},{color},{block_duration}"
                     for c in clients:
                         sock.sendto(block_msg.encode(), c)
+            
+            # Check if board is full after this selection
+            if is_board_full():
+                end_game(sock)
 
 def handle_adjacent_cells_timeout():
     """Check for timed out adjacent blocked cells"""
@@ -171,6 +244,10 @@ def handle_updates():
                     
                     clients[addr] = {"color": color, "name": client_name}
                     
+                    # Send grid dimensions to client
+                    grid_msg = f"grid_config,{GRID_ROWS},{GRID_COLS}"
+                    sock.sendto(grid_msg.encode(), addr)
+                    
                     identity_msg = f"identity,{client_name},{color}"
                     sock.sendto(identity_msg.encode(), addr)
                     
@@ -200,8 +277,8 @@ def handle_updates():
                     
                     with board_lock:
                         board_state = []
-                        for r in range(10):
-                            for c in range(10):
+                        for r in range(GRID_ROWS):
+                            for c in range(GRID_COLS):
                                 cell = board[r][c]
                                 if cell is None:
                                     board_state.append("None,None")
@@ -239,6 +316,10 @@ def handle_updates():
                             sock.sendto(join_msg.encode(), c)
                     
                 elif msg[0] == 'click':
+                    # Check if game has ended
+                    if game_ended:
+                        continue
+                        
                     if addr not in clients:
                         continue
                         
@@ -301,6 +382,12 @@ def handle_updates():
                         selecting_msg = f"selecting,{row},{col},{client_name},{client_color},{selection_duration}"
                         for c in clients:
                             sock.sendto(selecting_msg.encode(), c)
+                
+                elif msg[0] == 'end_game':
+                    # Client requested to end the game early
+                    if addr in clients and game_started and not game_ended:
+                        client_name = clients[addr]["name"]
+                        end_game(sock, client_name)
                 
                 elif msg[0] == 'disconnect':
                     if addr in clients:

@@ -7,6 +7,10 @@ import time
 SERVER_IP = sys.argv[1] if len(sys.argv) > 1 else '127.0.0.1'
 SERVER_PORT = 5005
 
+# Default grid dimensions - will be updated from server
+GRID_ROWS = 3
+GRID_COLS = 3
+
 class CheckBoxClient:
     def __init__(self, root):
         self.root = root
@@ -17,11 +21,17 @@ class CheckBoxClient:
         self.player_color = None
         
         self.player_colors = {}
+        self.player_scores = {}
         
         self.is_selecting = False
+        self.game_ended = False
         
-        self.board_owners = [[None for _ in range(10)] for _ in range(10)]
-        self.board_colors = [[None for _ in range(10)] for _ in range(10)]
+        # Initialize with default grid size, will be updated when server sends dimensions
+        self.grid_rows = GRID_ROWS
+        self.grid_cols = GRID_COLS
+        
+        self.board_owners = [[None for _ in range(self.grid_cols)] for _ in range(self.grid_rows)]
+        self.board_colors = [[None for _ in range(self.grid_cols)] for _ in range(self.grid_rows)]
         
         self.selecting_cells = {}
         
@@ -49,11 +59,87 @@ class CheckBoxClient:
         # Show waiting frame initially
         self.waiting_frame.pack(fill=tk.BOTH, expand=True)
         
-        # Create game screen (initially hidden)
+        # We'll create the grid when we receive grid dimensions from server
         self.grid_frame = tk.Frame(root)
-        self.checkboxes = [[None for _ in range(10)] for _ in range(10)]
-        for r in range(10):
-            for c in range(10):
+        self.checkboxes = None  # Will be initialized after grid dimensions are received
+        
+        self.info_frame = tk.Frame(root)
+        
+        self.player_label = tk.Label(self.info_frame, text="Connecting to server...")
+        self.player_label.pack()
+        
+        self.status_label = tk.Label(self.info_frame, text="")
+        self.status_label.pack()
+        
+        # Add End Game button
+        self.end_game_button = tk.Button(
+            self.info_frame, 
+            text="End Game", 
+            command=self.request_end_game,
+            bg="red",
+            fg="white"
+        )
+        self.end_game_button.pack(pady=10)
+        
+        self.players_frame = tk.Frame(self.info_frame)
+        self.players_frame.pack(pady=5)
+        self.legend_label = tk.Label(self.players_frame, text="Players:")
+        self.legend_label.pack()
+        
+        # Create results screen (initially hidden)
+        self.results_frame = tk.Frame(root, padx=20, pady=20)
+        self.results_title = tk.Label(
+            self.results_frame, 
+            text="Game Over!",
+            font=("Arial", 18, "bold")
+        )
+        self.results_title.pack(pady=10)
+        
+        self.winner_label = tk.Label(
+            self.results_frame,
+            text="",
+            font=("Arial", 16)
+        )
+        self.winner_label.pack(pady=10)
+        
+        self.score_frame = tk.Frame(self.results_frame)
+        self.score_frame.pack(pady=10)
+        
+        self.score_title = tk.Label(
+            self.score_frame,
+            text="Final Scores:",
+            font=("Arial", 14, "bold")
+        )
+        self.score_title.pack(anchor=tk.W)
+        
+        self.scores_list = tk.Frame(self.score_frame)
+        self.scores_list.pack(pady=5, fill=tk.X)
+        
+        self.exit_button = tk.Button(
+            self.results_frame,
+            text="Exit Game",
+            command=self.on_closing,
+            font=("Arial", 12),
+            bg="white",
+            fg="black",
+            padx=20,
+            pady=5
+        )
+        self.exit_button.pack(pady=15)
+        
+        # Connect to server
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.sock.sendto("register".encode(), (SERVER_IP, SERVER_PORT))
+        
+        self.listener = threading.Thread(target=self.listen_for_updates, daemon=True)
+        self.listener.start()
+    
+    def initialize_grid(self):
+        """Initialize the game grid with current dimensions"""
+        self.checkboxes = [[None for _ in range(self.grid_cols)] for _ in range(self.grid_rows)]
+        
+        for r in range(self.grid_rows):
+            for c in range(self.grid_cols):
                 cell_frame = tk.Frame(self.grid_frame, width=30, height=30, 
                                      borderwidth=1, relief="solid")
                 cell_frame.grid(row=r, column=c)
@@ -71,29 +157,9 @@ class CheckBoxClient:
                     "timer_label": timer_label
                 }
         
-        self.info_frame = tk.Frame(root)
-        
-        self.player_label = tk.Label(self.info_frame, text="Connecting to server...")
-        self.player_label.pack()
-        
-        self.status_label = tk.Label(self.info_frame, text="")
-        self.status_label.pack()
-        
-        self.players_frame = tk.Frame(self.info_frame)
-        self.players_frame.pack(pady=5)
-        self.legend_label = tk.Label(self.players_frame, text="Players:")
-        self.legend_label.pack()
-        
-        # Start the timers
+        # Start the timers after grid is initialized
         self.update_timers()
         self.update_blocked_cells_blink()
-        
-        # Connect to server
-        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.sock.sendto("register".encode(), (SERVER_IP, SERVER_PORT))
-        
-        self.listener = threading.Thread(target=self.listen_for_updates, daemon=True)
-        self.listener.start()
     
     def start_game(self):
         """Switch from waiting screen to game board"""
@@ -103,20 +169,86 @@ class CheckBoxClient:
         self.update_all_cells()
     
     def handle_click(self, row, col):
-        if self.is_selecting:
+        """Handle checkbox click"""
+        if self.is_selecting or self.game_ended:
             return
             
-        if (self.board_owners[row][col] is not None or 
-            (row, col) in self.selecting_cells or 
-            (row, col) in self.blocked_cells):
-            return
-        
         msg = f"click,{row},{col}"
         self.sock.sendto(msg.encode(), (SERVER_IP, SERVER_PORT))
-        
-        self.is_selecting = True
-        self.update_status("Selecting a cell...")
     
+    def request_end_game(self):
+        """Send request to end the game early"""
+        if not self.game_ended:
+            msg = "end_game"
+            self.sock.sendto(msg.encode(), (SERVER_IP, SERVER_PORT))
+    
+    def show_results(self, winners, scores, ended_by=None):
+        """Show the game results screen"""
+        self.game_ended = True
+        
+        # Hide game screen
+        if self.grid_frame.winfo_ismapped():
+            self.grid_frame.pack_forget()
+        if self.info_frame.winfo_ismapped():
+            self.info_frame.pack_forget()
+        
+        # Update winner label
+        if ended_by:
+            self.results_title.config(text=f"Game Ended by {ended_by}")
+        else:
+            self.results_title.config(text="Game Complete!")
+        
+        if self.player_name in winners:
+            self.winner_label.config(
+                text="You Won! 🏆",
+                fg="green",
+                font=("Arial", 18, "bold")
+            )
+        elif len(winners) > 1:
+            winner_names = ", ".join(winners)
+            self.winner_label.config(
+                text=f"Winners: {winner_names}",
+                fg="blue"
+            )
+        else:
+            winner_name = winners[0] if winners else "No one"
+            self.winner_label.config(
+                text=f"Winner: {winner_name}",
+                fg="blue"
+            )
+        
+        # Clear previous scores
+        for widget in self.scores_list.winfo_children():
+            widget.destroy()
+        
+        # Sort players by score (highest first)
+        sorted_players = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+        
+        # Add each player's score
+        for player, score in sorted_players:
+            score_row = tk.Frame(self.scores_list)
+            score_row.pack(anchor=tk.W, pady=2, fill=tk.X)
+            
+            # Get player color
+            player_color = self.player_colors.get(player, "gray")
+            
+            # Highlight current player
+            name_font = ("Arial", 12)
+            if player == self.player_name:
+                name_font = ("Arial", 12, "bold")
+            
+            color_block = tk.Frame(score_row, width=15, height=15, bg=player_color)
+            color_block.pack(side=tk.LEFT, padx=5)
+            
+            name_label = tk.Label(score_row, text=player, font=name_font)
+            name_label.pack(side=tk.LEFT, padx=5)
+            
+            score_label = tk.Label(score_row, text=str(score), font=("Arial", 12))
+            score_label.pack(side=tk.RIGHT, padx=10)
+        
+        # Show results frame
+        self.results_frame.pack(fill=tk.BOTH, expand=True)
+
     def update_status(self, message):
         self.status_label.config(text=message)
     
@@ -235,8 +367,9 @@ class CheckBoxClient:
                 self.checkboxes[row][col]["checkbox"].config(state=tk.NORMAL)
     
     def update_all_cells(self):
-        for r in range(10):
-            for c in range(10):
+        """Update the appearance of all cells"""
+        for r in range(self.grid_rows):
+            for c in range(self.grid_cols):
                 self.update_cell_appearance(r, c)
     
     def listen_for_updates(self):
@@ -245,7 +378,19 @@ class CheckBoxClient:
                 data, _ = self.sock.recvfrom(1024)
                 msg = data.decode().split(',')
                 
-                if msg[0] == 'waiting':
+                if msg[0] == 'grid_config':
+                    # Update grid dimensions
+                    self.grid_rows = int(msg[1])
+                    self.grid_cols = int(msg[2])
+                    
+                    # Re-initialize board arrays with new dimensions
+                    self.board_owners = [[None for _ in range(self.grid_cols)] for _ in range(self.grid_rows)]
+                    self.board_colors = [[None for _ in range(self.grid_cols)] for _ in range(self.grid_rows)]
+                    
+                    # Initialize the grid UI
+                    self.initialize_grid()
+                
+                elif msg[0] == 'waiting':
                     current_players = int(msg[1])
                     required_players = int(msg[2])
                     self.players_count_label.config(
@@ -254,6 +399,40 @@ class CheckBoxClient:
                 
                 elif msg[0] == 'game_start':
                     self.start_game()
+                
+                elif msg[0] == 'game_end':
+                    # Parse game end message
+                    end_type = msg[1]
+                    
+                    if end_type == 'ended_by':
+                        ended_by = msg[2]
+                        winners = msg[3].split(';') if msg[3] else []
+                        
+                        # Parse scores
+                        scores = {}
+                        if len(msg) > 4 and msg[4]:
+                            score_pairs = msg[4].split(';')
+                            for pair in score_pairs:
+                                if pair:
+                                    parts = pair.split(',')
+                                    if len(parts) >= 2:
+                                        scores[parts[0]] = int(parts[1])
+                        
+                        self.show_results(winners, scores, ended_by)
+                    else:  # board_full
+                        winners = msg[2].split(';') if msg[2] else []
+                        
+                        # Parse scores
+                        scores = {}
+                        if len(msg) > 3 and msg[3]:
+                            score_pairs = msg[3].split(';')
+                            for pair in score_pairs:
+                                if pair:
+                                    parts = pair.split(',')
+                                    if len(parts) >= 2:
+                                        scores[parts[0]] = int(parts[1])
+                        
+                        self.show_results(winners, scores)
                 
                 elif msg[0] == 'identity':
                     self.player_name = msg[1]
@@ -273,8 +452,8 @@ class CheckBoxClient:
                 elif msg[0] == 'board':
                     board_data = msg[1:]
                     index = 0
-                    for r in range(10):
-                        for c in range(10):
+                    for r in range(self.grid_rows):
+                        for c in range(self.grid_cols):
                             owner = board_data[index]
                             color = board_data[index + 1]
                             
@@ -359,8 +538,8 @@ class CheckBoxClient:
                         "blink_state": False
                     }
                     
-                    for sel_r in range(10):
-                        for sel_c in range(10):
+                    for sel_r in range(self.grid_rows):
+                        for sel_c in range(self.grid_cols):
                             if (sel_r, sel_c) in self.selecting_cells and self.selecting_cells[(sel_r, sel_c)]["player"] == player:
                                 self.blocked_by_selection[(r, c)] = (sel_r, sel_c)
                                 break
@@ -398,7 +577,8 @@ class CheckBoxClient:
     
     def on_closing(self):
         try:
-            self.sock.sendto("disconnect".encode(), (SERVER_IP, SERVER_PORT))
+            if not self.game_ended:
+                self.sock.sendto("disconnect".encode(), (SERVER_IP, SERVER_PORT))
         except:
             pass
         self.root.destroy()
