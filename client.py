@@ -8,8 +8,8 @@ SERVER_IP = sys.argv[1] if len(sys.argv) > 1 else '127.0.0.1'
 SERVER_PORT = 5005
 
 # Default grid dimensions - will be updated from server
-GRID_ROWS = 3
-GRID_COLS = 3
+GRID_ROWS = 20
+GRID_COLS = 20
 
 class CheckBoxClient:
     def __init__(self, root):
