@@ -183,7 +183,8 @@ class CheckBoxClient:
         owner = self.board_owners[row][col]
         color = self.board_colors[row][col]
         
-        if (row, col) in self.blocked_cells:
+        current_time = time.time()
+        if (row, col) in self.blocked_cells and current_time <= self.blocked_cells[(row, col)]["end_time"]:
             self.checkboxes[row][col]["checkbox"].config(state=tk.DISABLED)
             return
             
