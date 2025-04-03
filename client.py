@@ -30,9 +30,27 @@ class CheckBoxClient:
         
         self.blocked_by_selection = {}
         
-        self.grid_frame = tk.Frame(root)
-        self.grid_frame.pack(padx=10, pady=10)
+        # Create waiting screen
+        self.waiting_frame = tk.Frame(root, padx=20, pady=20)
+        self.waiting_label = tk.Label(
+            self.waiting_frame, 
+            text="Waiting for players to join...",
+            font=("Arial", 16)
+        )
+        self.waiting_label.pack(pady=20)
         
+        self.players_count_label = tk.Label(
+            self.waiting_frame,
+            text="Players: 0/4",
+            font=("Arial", 14)
+        )
+        self.players_count_label.pack(pady=10)
+        
+        # Show waiting frame initially
+        self.waiting_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # Create game screen (initially hidden)
+        self.grid_frame = tk.Frame(root)
         self.checkboxes = [[None for _ in range(10)] for _ in range(10)]
         for r in range(10):
             for c in range(10):
@@ -54,7 +72,6 @@ class CheckBoxClient:
                 }
         
         self.info_frame = tk.Frame(root)
-        self.info_frame.pack(pady=10)
         
         self.player_label = tk.Label(self.info_frame, text="Connecting to server...")
         self.player_label.pack()
@@ -67,14 +84,23 @@ class CheckBoxClient:
         self.legend_label = tk.Label(self.players_frame, text="Players:")
         self.legend_label.pack()
         
+        # Start the timers
         self.update_timers()
         self.update_blocked_cells_blink()
         
+        # Connect to server
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.sendto("register".encode(), (SERVER_IP, SERVER_PORT))
         
         self.listener = threading.Thread(target=self.listen_for_updates, daemon=True)
         self.listener.start()
+    
+    def start_game(self):
+        """Switch from waiting screen to game board"""
+        self.waiting_frame.pack_forget()
+        self.grid_frame.pack(padx=10, pady=10)
+        self.info_frame.pack(pady=10)
+        self.update_all_cells()
     
     def handle_click(self, row, col):
         if self.is_selecting:
@@ -219,7 +245,17 @@ class CheckBoxClient:
                 data, _ = self.sock.recvfrom(1024)
                 msg = data.decode().split(',')
                 
-                if msg[0] == 'identity':
+                if msg[0] == 'waiting':
+                    current_players = int(msg[1])
+                    required_players = int(msg[2])
+                    self.players_count_label.config(
+                        text=f"Players: {current_players}/{required_players}"
+                    )
+                
+                elif msg[0] == 'game_start':
+                    self.start_game()
+                
+                elif msg[0] == 'identity':
                     self.player_name = msg[1]
                     self.player_color = msg[2]
                     

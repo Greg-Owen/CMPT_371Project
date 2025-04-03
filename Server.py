@@ -1,11 +1,12 @@
-
 import sys
 import threading
 import time
 import random
+import socket
 
 HOST = '0.0.0.0'
 PORT = 5005
+REQUIRED_PLAYERS = 4  # Number of players required to start the game
 
 board = [[None for _ in range(10)] for _ in range(10)]
 board_lock = threading.Lock()
@@ -13,6 +14,7 @@ board_lock = threading.Lock()
 clients = {}
 next_id = 1
 colors = ["red", "blue", "green", "purple", "orange", "magenta", "cyan", "brown", "yellow", "pink"]
+game_started = False  # Track if the game has started
 
 selecting_cells = {}
 client_selecting = {}
@@ -40,7 +42,7 @@ def clear_temp_blocks_for_selection(sock, row, col):
     """Clear temporary blocks associated with a selection"""
     global temp_blocked_during_selection
     
-    cells_to_unblock = []
+    cells_to_unblock = []       
     for blocked_cell, info in temp_blocked_during_selection.items():
         if info["selection_cell"] == (row, col):
             cells_to_unblock.append(blocked_cell)
@@ -60,7 +62,7 @@ def selection_complete(sock, row, col, client_addr):
         if (row, col) in selecting_cells and selecting_cells[(row, col)]["addr"] == client_addr:
             client_id = clients[client_addr]["name"]
             color = clients[client_addr]["color"]
-            board[row][col] = client_id
+            board[row][col] = client_id         # Marking the cell occupied by the client
             
             del selecting_cells[(row, col)]
             
@@ -69,10 +71,13 @@ def selection_complete(sock, row, col, client_addr):
             
             update_msg = f"update,{row},{col},{client_id},{color}"
             for c in clients:
-                sock.sendto(update_msg.encode(), c)
+                sock.sendto(update_msg.encode(), c)     #Updating the board for each client
             
             clear_temp_blocks_for_selection(sock, row, col)
-                
+
+            """Why block the cells after we are done with the selection complete and cleared the array of temp_blocks??
+                Inconsistent code
+            """  
             adjacent_cells = get_adjacent_cells(row, col)
             block_duration = 3.0
             end_time = time.time() + block_duration
@@ -152,7 +157,7 @@ def handle_updates():
                 msg = data.decode().split(',')
                 
                 if msg[0] == 'register':
-                    global next_id
+                    global next_id, game_started
                     client_name = f"Player {next_id}"
                     next_id += 1
                     
@@ -168,6 +173,25 @@ def handle_updates():
                     
                     identity_msg = f"identity,{client_name},{color}"
                     sock.sendto(identity_msg.encode(), addr)
+                    
+                    # Send player count to all clients
+                    waiting_msg = f"waiting,{len(clients)},{REQUIRED_PLAYERS}"
+                    for c in clients:
+                        sock.sendto(waiting_msg.encode(), c)
+                    
+                    # Check if we have enough players to start
+                    if len(clients) >= REQUIRED_PLAYERS and not game_started:
+                        game_started = True
+                        print(f"Game starting with {len(clients)} players!")
+                        
+                        # Tell all clients to start the game
+                        start_msg = "game_start"
+                        for c in clients:
+                            sock.sendto(start_msg.encode(), c)
+                    
+                    # If game already started, tell the new player
+                    elif game_started:
+                        sock.sendto("game_start".encode(), addr)
                     
                     for client_addr, client_data in clients.items():
                         player_info = f"player_info,{client_data['name']},{client_data['color']}"
@@ -294,6 +318,12 @@ def handle_updates():
                         disconnect_msg = f"player_left,{client_name}"
                         for c in clients:
                             sock.sendto(disconnect_msg.encode(), c)
+                        
+                        # Update waiting status if game hasn't started
+                        if not game_started:
+                            waiting_msg = f"waiting,{len(clients)},{REQUIRED_PLAYERS}"
+                            for c in clients:
+                                sock.sendto(waiting_msg.encode(), c)
                             
             except Exception as e:
                 print(f"Error: {e}")
