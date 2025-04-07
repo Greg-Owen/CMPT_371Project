@@ -8,8 +8,8 @@ SERVER_IP = sys.argv[1] if len(sys.argv) > 1 else '127.0.0.1'
 SERVER_PORT = 5005
 
 # Default grid dimensions - will be updated from server
-GRID_ROWS = 20
-GRID_COLS = 20
+GRID_ROWS = 10
+GRID_COLS = 10
 
 class CheckBoxClient:
     def __init__(self, root):
@@ -51,7 +51,7 @@ class CheckBoxClient:
         
         self.players_count_label = tk.Label(
             self.waiting_frame,
-            text="Players: 0/4",
+            text="Players: 0/3",
             font=("Arial", 14)
         )
         self.players_count_label.pack(pady=10)
@@ -140,7 +140,7 @@ class CheckBoxClient:
         
         for r in range(self.grid_rows):
             for c in range(self.grid_cols):
-                cell_frame = tk.Frame(self.grid_frame, width=30, height=30, 
+                cell_frame = tk.Frame(self.grid_frame, width=50, height=50, 
                                      borderwidth=1, relief="solid")
                 cell_frame.grid(row=r, column=c)
                 cell_frame.grid_propagate(False)

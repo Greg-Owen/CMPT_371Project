@@ -6,11 +6,11 @@ import socket
 
 HOST = '0.0.0.0'
 PORT = 5005
-REQUIRED_PLAYERS = 4  # Number of players required to start the game
+REQUIRED_PLAYERS = 3  # Number of players required to start the game
 
 # Grid dimensions - configurable
-GRID_ROWS = 20
-GRID_COLS = 20
+GRID_ROWS = 10
+GRID_COLS = 10
 
 board = [[None for _ in range(GRID_COLS)] for _ in range(GRID_ROWS)]
 board_lock = threading.Lock()
